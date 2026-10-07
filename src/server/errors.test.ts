@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { NotFoundError, StateTransitionError, ValidationError } from "../core/errors.ts";
 import { ProjectUnavailableError } from "../projects/errors.ts";
 import { AgentSchemaError } from "../registry/errors.ts";
-import { RunSpawnError } from "../runs/errors.ts";
+import { MigrationPreflightError, RunSpawnError } from "../runs/errors.ts";
 import {
 	RuntimeAdmissionError,
 	RuntimeConflictError,
@@ -90,6 +90,13 @@ describe("renderError — WarrenError mapping", () => {
 
 	test("AgentSchemaError → 422", () => {
 		expect(renderError(new AgentSchemaError("missing system")).status).toBe(422);
+	});
+
+	test("MigrationPreflightError → 409 with code and hint passthrough (#1301)", () => {
+		const r = renderError(new MigrationPreflightError("migration preflight: `git show` failed"));
+		expect(r.status).toBe(409);
+		expect(r.envelope.error.code).toBe("migration_preflight_failed");
+		expect(r.envelope.error.hint).toContain("rebase the branch");
 	});
 
 	test("RunSpawnError → 500", () => {

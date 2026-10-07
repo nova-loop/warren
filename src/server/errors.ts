@@ -38,7 +38,7 @@ import { IssueNotFoundError } from "../core/wire.ts";
 import { PlanHasNoOpenChildrenError, ProjectLacksTrackerError } from "../plan-runs/errors.ts";
 import { ProjectUnavailableError } from "../projects/errors.ts";
 import { AgentSchemaError } from "../registry/errors.ts";
-import { RunSpawnError } from "../runs/errors.ts";
+import { MigrationPreflightError, RunSpawnError } from "../runs/errors.ts";
 import {
 	RuntimeAdmissionError,
 	RuntimeConflictError,
@@ -235,6 +235,10 @@ function warrenStatusFor(err: WarrenError): number {
 	// warren-1219: the resolved git cannot execute inside the sandbox —
 	// a host toolchain problem (fix the host), same family as 503.
 	if (err instanceof SandboxGitPreflightError) return 503;
+	// #1301: a ref-dispatch whose branch migration journal collides with main
+	// and could not be healed. The branch conflicts with main; the request
+	// itself is fine, so 409 rather than an opaque 500.
+	if (err instanceof MigrationPreflightError) return 409;
 	if (err instanceof WarrenConfigUnavailableError) return 503;
 	// warren-02aa: a present-but-broken guardrail file is operator-fixable
 	// input, not a host failure — 422, same family as AgentSchemaError.

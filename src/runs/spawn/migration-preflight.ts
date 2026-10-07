@@ -38,12 +38,21 @@ import {
 } from "../../bot-identity.ts";
 import type { Repos } from "../../db/repos/index.ts";
 import { DEFAULT_GIT_TIMEOUT_MS, type SpawnFn } from "../../projects/clone.ts";
+import { MigrationPreflightError } from "../errors.ts";
 
 /** Default regeneration command — warren's package.json regenerates BOTH journals. */
 export const DEFAULT_GENERATE_COMMAND: readonly string[] = ["bun", "run", "db:generate"];
 
 /** Directory-name suffix that marks a drizzle journal path. */
 const JOURNAL_SUFFIX = "meta/_journal.json";
+
+/**
+ * drizzle-kit names a snapshot by its journal index alone, zero-padded to 4
+ * digits (`meta/0046_snapshot.json`); only the `.sql` file carries the tag.
+ */
+export function snapshotFileName(idx: number): string {
+	return `${String(idx).padStart(4, "0")}_snapshot.json`;
+}
 
 export interface JournalEntry {
 	readonly idx: number;
@@ -157,7 +166,9 @@ async function mustSpawn(
 		...(env !== undefined ? { env } : {}),
 	});
 	if (result.exitCode !== 0) {
-		throw new Error(`migration preflight: \`${cmd.join(" ")}\` failed: ${result.stderr.trim()}`);
+		throw new MigrationPreflightError(
+			`migration preflight: \`${cmd.join(" ")}\` failed: ${result.stderr.trim()}`,
+		);
 	}
 	return result.stdout;
 }
@@ -202,10 +213,12 @@ async function healOneJournal(
 		.filter((e) => !main.entries.some((m) => m.idx === e.idx || m.tag === e.tag));
 	const merged = [...main.entries, ...keptExtras].sort((a, b) => a.idx - b.idx);
 
-	// Delete the colliding migration artifacts (sql + snapshot).
-	for (const tag of collidingTags) {
-		await rm(join(input.projectPath, dir, `${tag}.sql`), { force: true });
-		await rm(join(input.projectPath, dir, "meta", `${tag}_snapshot.json`), { force: true });
+	// Delete the colliding migration artifacts (sql + snapshot). The snapshot
+	// is named by the branch entry's idx, so walk the entries, not the tags.
+	for (const entry of branch.entries) {
+		if (!collidingTags.has(entry.tag)) continue;
+		await rm(join(input.projectPath, dir, `${entry.tag}.sql`), { force: true });
+		await rm(join(input.projectPath, dir, "meta", snapshotFileName(entry.idx)), { force: true });
 	}
 	// Re-sync the journal to main + kept extras.
 	await writeFile(
@@ -215,7 +228,7 @@ async function healOneJournal(
 	// Restore any main-side migration files the branch worktree lacks so
 	// the regenerate diffs against main's tip snapshot.
 	for (const entry of main.entries) {
-		for (const rel of [`${dir}/${entry.tag}.sql`, `${dir}/meta/${entry.tag}_snapshot.json`]) {
+		for (const rel of [`${dir}/${entry.tag}.sql`, `${dir}/meta/${snapshotFileName(entry.idx)}`]) {
 			const abs = join(input.projectPath, rel);
 			if (await pathExists(abs)) continue;
 			const content = await mustSpawn(
